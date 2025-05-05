@@ -94,7 +94,6 @@ class Tokenizer():
             self.chunk_tokens = self.get_tokens(self.chunks)
             self.vocab , self.merge_dictionary = self.encode(vocab_size,save_path,self.chunk_tokens)
 
-    @profile
     def process_data(self):
         with open(self.language_file_input, 'r') as input_data:
             input_data = input_data.readlines()
@@ -109,7 +108,6 @@ class Tokenizer():
         chunks = re.findall(self.regex,final_data)
         return chunks
 
-    @profile
     def get_tokens(self, *args):
         tokens = []
         if len(args) == 0:
@@ -123,7 +121,6 @@ class Tokenizer():
             tokens.append(tokens_int)
         return tokens
 
-    @profile
     def get_stats_original(self, *args):
         dictionary = {}
         if len(args) == 0:
@@ -140,13 +137,11 @@ class Tokenizer():
                     dictionary[pair] = 1
         return dictionary 
     
-    @profile
     def get_stats(self, *args):
         chunk_tokens = self.chunk_tokens if not args else args[0]
         return Counter((a, b) for tokens in chunk_tokens 
                    for a, b in zip(tokens, tokens[1:]))
     
-    @profile
     def merge(self,pair,idx,chunk_tokens):
         pair_0, pair_1 = pair
         merged_chunk_tokens = []
@@ -168,7 +163,6 @@ class Tokenizer():
         
         return merged_chunk_tokens
 
-    @profile
     def encode(self, total_vocab_size, save_path, *args):
         vocab = {idx:bytes([idx]) for idx in range(256)}
         idx=256
@@ -204,7 +198,7 @@ class Tokenizer():
         sentence = b"".join(all_bytes)
         return sentence.decode("utf-8", errors="replace")
 
-
+    @profile
     def encode_infer(self, text, merge_dictionary, return_single_list = False):
         chunks = re.findall(self.regex, text)
         chunk_tokens = self.get_tokens(chunks)
@@ -212,6 +206,8 @@ class Tokenizer():
         i=0
         while True:
             all_pairs = self.get_stats(chunk_tokens)
+            if len(all_pairs) == 0:
+                break
             pair = min(all_pairs, key=lambda p: merge_dictionary.get(p, float("inf")))
             if pair not in merge_dictionary:
                 break
