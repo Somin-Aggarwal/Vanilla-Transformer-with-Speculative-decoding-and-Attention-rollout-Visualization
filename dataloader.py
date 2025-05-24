@@ -1,9 +1,10 @@
 import torch
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
-from training_tokenier import Tokenizer
+from tokenizer import Tokenizer
 import pickle
-from line_profiler import profile
+import matplotlib.pyplot as plt
+from model import TransformerSummary, Transformer
 
 # USing this the diagonal and lower triangular matrices are true rest false
 def casual_mask(size):
@@ -71,9 +72,10 @@ class TranslationDataset(Dataset):
             enc_tokens = [self.sos_token] + enc_tokens + [self.eos_token]
             dec_tokens = [self.sos_token] + dec_tokens + [self.eos_token]
 
+
         decoder_input = dec_tokens[:-1]       # [SOS] + sentence tokens
         decoder_output = dec_tokens[1:]       # sentence tokens + [EOS]
-
+        
         enc_padded = self.pad_or_truncate(enc_tokens)
         dec_in_padded = self.pad_or_truncate(decoder_input)
         dec_out_padded = self.pad_or_truncate(decoder_output)
@@ -117,15 +119,62 @@ def get_dataloader(input_language_path, output_language_path, vocab_merge_file, 
         generator=generator
     )
     
-if __name__=="__main__":
-    encoder_file = "data_files/english_val.txt"
-    decoder_file = "data_files/german_val.txt"
-    vocab_merge_file = "vocab.pkl"
+if __name__ == "__main__":
+    
+    from torchsummary import summary
+    
+    encoder_file = "data_files/encodings_train.txt"
+    decoder_file = "data_files/decodings_train.txt"
+    vocab_merge_file = "data_files/vocab.pkl"
     context_length = 300
     pad_token = 255
-    dataloader = get_dataloader(encoder_file,decoder_file,vocab_merge_file,context_length,pad_token, batch_size=1, shuffle=False)
+    device = 'cuda'
+
+    dataloader = get_dataloader(
+        encoder_file, decoder_file, vocab_merge_file,
+        context_length, pad_token, already_tokenized=False,
+        batch_size=1, shuffle=False
+    )
     print(len(dataloader))
-    for i,data in enumerate(dataloader):
-        print(data.keys())
-        if i== 10:
-            break
+
+    no_of_stacks = 6
+    no_of_heads = 8
+    edim = 512
+    intermediate_features = 2048
+    vocab_size = 8192
+    pad_idx = 255
+    dropout = 0.1
+
+    transformer = Transformer(
+        vocab_size, context_length, no_of_stacks, no_of_heads,
+        edim, intermediate_features, pad_idx, dropout
+    ).to(device)
+
+    for i, data in enumerate(dataloader):
+        encoder_input = data["encoder_input"].to(device)
+        decoder_input = data["decoder_input"].to(device)
+        yarget = data["target"].to(device)  # assuming "yarget" is a typo for "target"
+        english_text = data["english_text"]  # Keep on CPU since it’s string
+        german_text = data["german_text"]    # Keep on CPU since it’s string
+        encoder_mask = data["encoder_mask"].to(device)
+        decoder_mask = data["decoder_mask"].to(device)        
+        
+        # print(f"Dataloader encoder input : {encoder_input}")
+        # encoder_input = transformer.vocab(encoder_input)
+        # encoder_input = transformer.positional_embedding(encoder_input)
+        # encoded_features = transformer.encoder(encoder_input,encoder_mask)
+        # print(torch.isnan(encoded_features).any())
+        # decoder_input = transformer.vocab(decoder_input)
+        # decoder_input = transformer.positional_embedding(decoder_input)
+        # print(torch.isnan(decoder_input).any())
+        # output = transformer.decoder.blocks[0].MHA(decoder_input,decoder_input,decoder_input,decoder_mask)
+        # print(f"Encoder_input : {encoder_input[0,:,0]}")
+        # print(f"Decoder input : {decoder_input[0,:,0]}")
+        # print(f"Output : {output}")
+        # print(torch.isnan(output).any())
+        
+        # output = transformer(encoder_input, decoder_input, encoder_mask, decoder_mask)
+        
+        break 
+
+        
