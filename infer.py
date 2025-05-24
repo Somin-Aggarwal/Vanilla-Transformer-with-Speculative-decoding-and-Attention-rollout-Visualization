@@ -4,6 +4,7 @@ from torch import nn
 from tokenizer import Tokenizer
 from dataloader import get_dataloader
 from model import Transformer
+import argparse
 
 # ——— Utilities ———
 
@@ -54,7 +55,6 @@ def prepare_inputs(
     """
     # tokenize + pad
     tokens = tokenizer.encode_infer(sentence, merge_dict, return_single_list=True)
-    print(tokens)
     tokens = [sos_token] + tokens + [eos_token]
     enc = pad_or_truncate(tokens, context_length, pad_token)
     enc_tensor = torch.tensor(enc, dtype=torch.long, device=device).unsqueeze(0)
@@ -66,33 +66,25 @@ def prepare_inputs(
     return enc_tensor, enc_mask
 
 def decode_bytes(tokens: list, vocab: dict) -> str:
-    raw = b"".join(vocab[idx] for idx in tokens)
+    raw = b""
+    for idx in tokens:
+        if idx == 254:
+            break
+        raw+=vocab[idx]
+    # raw = b"".join(vocab[idx] for idx in tokens)
     return raw.decode("utf-8", errors="replace")
 
 
 # ——— Main Inference ———
 
-def main():
+def main(args):
     # config
     WEIGHTS = "weights/best_model.pt"
     VOCAB_PKL = "data_files/vocab.pkl"
-    DEVICE = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     CONTEXT_LEN = 300
     SOS, EOS, PAD = 0, 254, 255
     MAX_GEN = CONTEXT_LEN
-
-    # Prepare validation data loader
-    val_loader = get_dataloader(
-        input_language_path="data_files/english_val.txt",
-        output_language_path="data_files/german_val.txt",
-        vocab_merge_file="data_files/vocab.pkl",
-        context_length=300,
-        pad_token=255,
-        already_tokenized=False,
-        batch_size=1,
-        shuffle=False,
-        seed=42
-    )
 
     # model
     model = Transformer(
@@ -116,52 +108,43 @@ def main():
     
     # autoregressive decode
     generated = [SOS]
-    for batch in val_loader:
-        enc_input = batch['encoder_input'].to(DEVICE)
-        dec_input = batch['decoder_input'].to(DEVICE)
-        target = batch['target'].to(DEVICE)
-        enc_mask = batch['encoder_mask'].to(DEVICE)
-        dec_mask = batch['decoder_mask'].to(DEVICE)
-        english_text = batch['english_text']
-        german_text = batch['german_text']
-        print(english_text)
-        print(german_text)
 
-        # prepare encoder inputs
-        input_sentence = english_text[0]
-        enc_in, enc_mask = prepare_inputs(
-            input_sentence, tokenizer, merge_dict,
-            context_length=CONTEXT_LEN,
-            sos_token=SOS, eos_token=EOS, pad_token=PAD,
-            device=DEVICE
-        )
+    # prepare encoder inputs
+    input_sentence = args.input_sentence
+    enc_in, enc_mask = prepare_inputs(
+        input_sentence, tokenizer, merge_dict,
+        context_length=CONTEXT_LEN,
+        sos_token=SOS, eos_token=EOS, pad_token=PAD,
+        device=DEVICE
+    )
 
-        for _ in range(MAX_GEN):
-            # build decoder_input & mask
-            dec_in = torch.tensor(
-                pad_or_truncate(generated, CONTEXT_LEN, PAD),
-                dtype=torch.long, device=DEVICE
-            ).unsqueeze(0)  # (1, CONTEXT_LEN)
-            dec_mask = make_decoder_mask(dec_in, PAD, CONTEXT_LEN, DEVICE)
-            
-            # forward + greedy pick last position
-            with torch.no_grad():
-                logits = model(enc_in, dec_in, enc_mask, dec_mask)
-                probs = torch.softmax(logits,dim=-1)
-                last_idx = len(generated) - 1
-                last_logits = probs[:, last_idx, :]       # (1, vocab_size)
-                next_token = int(last_logits.argmax(dim=-1).item())
+    for _ in range(MAX_GEN):
+        # build decoder_input & mask
+        dec_in = torch.tensor(
+            pad_or_truncate(generated, CONTEXT_LEN, PAD),
+            dtype=torch.long, device=DEVICE
+        ).unsqueeze(0)  # (1, CONTEXT_LEN)
+        dec_mask = make_decoder_mask(dec_in, PAD, CONTEXT_LEN, DEVICE)
+        
+        # forward + greedy pick last position
+        with torch.no_grad():
+            logits = model(enc_in, dec_in, enc_mask, dec_mask)
+            probs = torch.softmax(logits,dim=-1)
+            last_idx = len(generated) - 1
+            last_logits = probs[:, last_idx, :]       # (1, vocab_size)
+            next_token = int(last_logits.argmax(dim=-1).item())
 
-            generated.append(next_token)
-            # if next_token == EOS:
-            #     break
-        break
+        generated.append(next_token)
+        if next_token == EOS:
+            break
 
-    # convert to text (drop SOS, include EOS if present)
+    # convert to text (drop SOS)
     output_text = decode_bytes(generated[1:], vocab_bytes)
-    # print("Generated tokens:", generated)
     print("Output text:", output_text)
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input_sentence",type=str,required=True)
+    args = parser.parse_args()
+    main(args)

@@ -4,7 +4,7 @@ from tqdm import tqdm
 from tokenizer import Tokenizer
 import pickle
 import matplotlib.pyplot as plt
-from model import TransformerSummary, Transformer
+from model import Transformer
 
 # USing this the diagonal and lower triangular matrices are true rest false
 def casual_mask(size):
