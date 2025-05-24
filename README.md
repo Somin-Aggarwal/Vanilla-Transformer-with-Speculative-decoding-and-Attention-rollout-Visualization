@@ -1,5 +1,6 @@
-# Vanilla Transformer for English to German Translation
+# Vanilla Transformers with Speculative Decoding and Attention Rollout Visualization
 
+Note: Speculative decoding and attention rollout visualization features are planned but not yet implemented.
 This repository contains an implementation of a vanilla Transformer model for the task of English-to-German translation. The Transformer architecture is implemented from scratch and trained on the IWSLT 2017 TED Talk dataset.
 
 ## Dataset
