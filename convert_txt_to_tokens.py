@@ -173,7 +173,7 @@ def convert_txt_to_encodings_and_decodings(input_language_path,output_language_p
             
     tokenizer = Tokenizer(input_language_path,output_language_path,vocab_size=8000)
 
-    with open("vocab.pkl",'rb') as file:
+    with open("data_files/vocab.pkl",'rb') as file:
         vocab, merge_dict = pickle.load(file)
 
     with open(input_language_path, "r") as input_language_file, open(output_language_path, "r") as output_language_file:
@@ -207,12 +207,13 @@ def convert_txt_to_encodings_and_decodings(input_language_path,output_language_p
     with open(encodings_file_path,"w") as encoding_file, open(decodings_file_path,"w") as decodings_file:
         encoding_file.writelines(input_language_encoded_lines)
         decodings_file.writelines(output_language_encoded_lines)
+        
 
 if __name__=="__main__":
     # txt files : 1 line - 1 sequence
-    input_language_path = "data_files/english_val.txt" # This language goes in encoder 
-    output_language_path = "data_files/german_val.txt" # This language comes out of decoder
-    encodings_file_path = "data_files/encodings_val_infer.txt" # This contains input to the encoder
-    decodings_file_path = "data_files/decodings_val_infer.txt" # This contains the input to the decoder and the label 
+    input_language_path = "data_files/english_val_all.txt" # This language goes in encoder 
+    output_language_path = "data_files/german_val_all.txt" # This language comes out of decoder
+    encodings_file_path = "data_files/encodings_val_all.txt" # This contains input to the encoder
+    decodings_file_path = "data_files/decodings_val_all.txt" # This contains the input to the decoder and the label 
     convert_txt_to_encodings_and_decodings(input_language_path, output_language_path,
                                            encodings_file_path, decodings_file_path)    
