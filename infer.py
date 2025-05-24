@@ -1,100 +1,165 @@
 import pickle
-
 import torch
-import torch.nn as nn
-
-from training_tokenier import Tokenizer
+from torch import nn
+from tokenizer import Tokenizer
+from dataloader import get_dataloader
 from model import Transformer
 
+# ——— Utilities ———
 
-def pad_or_truncate(
-    tokens: list, 
-    context_length: int, 
-    pad_token: int
-) -> list:
-    """
-    Ensure the token list is exactly context_length:
-    - Truncate if longer.
-    - Pad with pad_token if shorter.
-    """
-    if len(tokens) > context_length:
-        return tokens[:context_length]
-    return tokens + [pad_token] * (context_length - len(tokens))
+def pad_or_truncate(tokens: list, length: int, pad_token: int):
+    """Truncate or right-pad token list to exactly `length`."""
+    return tokens[:length] + [pad_token] * max(0, length - len(tokens))
 
+def casual_mask(size):
+    mask = torch.triu(torch.ones(1,size,size),diagonal=1).to(torch.int)
+    return mask == 0
 
-def decode(tokens_list: list, vocab: dict) -> str:
+def make_decoder_mask(
+    decoder_input: torch.Tensor,  # (1, cur_len)
+    pad_token: int,
+    max_len: int,
+    device: torch.device
+):
     """
-    Reconstruct a UTF-8 string from a list of token indices.
-    Unknown bytes are replaced.
+    Combine padding + causal masks into shape (1,1,cur_len,cur_len).
     """
-    raw = b"".join(vocab[idx] for idx in tokens_list)
+    # (1, cur_len)
+    valid = (decoder_input != pad_token)
+    # (1,cur_len,cur_len)
+    pad_q = valid.unsqueeze(1)
+    pad_k = valid.unsqueeze(2)
+    padding_mask = pad_q & pad_k
+
+    # lower‑tri mask (cur_len, cur_len)
+    causal = casual_mask(max_len).to(device)
+
+    # (1, cur_len, cur_len) → (1,1,cur_len,cur_len)
+    return (padding_mask & causal).unsqueeze(1)
+
+def prepare_inputs(
+    sentence: str,
+    tokenizer: Tokenizer,
+    merge_dict: dict,
+    context_length: int,
+    sos_token: int,
+    pad_token: int,
+    eos_token: int,
+    device: torch.device
+):
+    """
+    Returns:
+      encoder_input:  (1, src_len)
+      encoder_mask:   (1,1,1,src_len)
+    """
+    # tokenize + pad
+    tokens = tokenizer.encode_infer(sentence, merge_dict, return_single_list=True)
+    print(tokens)
+    tokens = [sos_token] + tokens + [eos_token]
+    enc = pad_or_truncate(tokens, context_length, pad_token)
+    enc_tensor = torch.tensor(enc, dtype=torch.long, device=device).unsqueeze(0)
+
+    # encoder mask: (1,1,1,src_len)
+    enc_valid = (enc_tensor != pad_token)
+    enc_mask = enc_valid.unsqueeze(1).unsqueeze(1)
+
+    return enc_tensor, enc_mask
+
+def decode_bytes(tokens: list, vocab: dict) -> str:
+    raw = b"".join(vocab[idx] for idx in tokens)
     return raw.decode("utf-8", errors="replace")
 
 
-def main():
-    # --------- Configuration ---------
-    weights_path = "checkpoint_epoch2_iter33596.pt"
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# ——— Main Inference ———
 
-    # --------- Model Setup -----------
+def main():
+    # config
+    WEIGHTS = "weights/best_model.pt"
+    VOCAB_PKL = "data_files/vocab.pkl"
+    DEVICE = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    CONTEXT_LEN = 300
+    SOS, EOS, PAD = 0, 254, 255
+    MAX_GEN = CONTEXT_LEN
+
+    # Prepare validation data loader
+    val_loader = get_dataloader(
+        input_language_path="data_files/english_val.txt",
+        output_language_path="data_files/german_val.txt",
+        vocab_merge_file="data_files/vocab.pkl",
+        context_length=300,
+        pad_token=255,
+        already_tokenized=False,
+        batch_size=1,
+        shuffle=False,
+        seed=42
+    )
+
+    # model
     model = Transformer(
         vocab_size=8192,
-        no_of_stacks=3,
+        context_length=CONTEXT_LEN,
+        no_of_stacks=6,
         no_of_heads=8,
         edim=512,
-        in_features=512,
         intermediate_features=2048,
-        out_features=512,
-        context_length=300,
-        pad_idx=255,
-    ).to(device)
-
-    ckpt = torch.load(weights_path, map_location=device)
+        pad_idx=PAD,
+        dropout=0.1
+    ).to(DEVICE)
+    ckpt = torch.load(WEIGHTS, map_location=DEVICE)
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
 
-    # --------- Tokenizer & Vocab -----
+    # tokenizer + vocab
+    with open(VOCAB_PKL, "rb") as f:
+        vocab_bytes, merge_dict = pickle.load(f)
     tokenizer = Tokenizer()
-    with open("vocab.pkl", "rb") as f:
-        vocab, merge_dict = pickle.load(f)
+    
+    # autoregressive decode
+    generated = [SOS]
+    for batch in val_loader:
+        enc_input = batch['encoder_input'].to(DEVICE)
+        dec_input = batch['decoder_input'].to(DEVICE)
+        target = batch['target'].to(DEVICE)
+        enc_mask = batch['encoder_mask'].to(DEVICE)
+        dec_mask = batch['decoder_mask'].to(DEVICE)
+        english_text = batch['english_text']
+        german_text = batch['german_text']
+        print(english_text)
+        print(german_text)
 
-    # ---- Input Sentence & Encoding ----
-    input_sentence =  "I have been blown away by this conference, and I want to thank all of you for the many nice comments about what I had to say the other night."
+        # prepare encoder inputs
+        input_sentence = english_text[0]
+        enc_in, enc_mask = prepare_inputs(
+            input_sentence, tokenizer, merge_dict,
+            context_length=CONTEXT_LEN,
+            sos_token=SOS, eos_token=EOS, pad_token=PAD,
+            device=DEVICE
+        )
 
-    encoder_tokens = tokenizer.encode_infer(
-        text=input_sentence,
-        merge_dictionary=merge_dict,
-        return_single_list=True,
-    )
-    encoder_tokens = pad_or_truncate(encoder_tokens, context_length=300, pad_token=255)
-    encoder_input = torch.tensor(encoder_tokens, dtype=torch.long)
-    encoder_input = encoder_input.unsqueeze(0).to(device)
+        for _ in range(MAX_GEN):
+            # build decoder_input & mask
+            dec_in = torch.tensor(
+                pad_or_truncate(generated, CONTEXT_LEN, PAD),
+                dtype=torch.long, device=DEVICE
+            ).unsqueeze(0)  # (1, CONTEXT_LEN)
+            dec_mask = make_decoder_mask(dec_in, PAD, CONTEXT_LEN, DEVICE)
+            
+            # forward + greedy pick last position
+            with torch.no_grad():
+                logits = model(enc_in, dec_in, enc_mask, dec_mask)
+                probs = torch.softmax(logits,dim=-1)
+                last_idx = len(generated) - 1
+                last_logits = probs[:, last_idx, :]       # (1, vocab_size)
+                next_token = int(last_logits.argmax(dim=-1).item())
 
-    # --------- Autoregressive Decoding ---------
-    decoded_tokens: list[int] = []
-    pad_token = 255
-    eos_token = 254
-    max_len = 300
+            generated.append(next_token)
+            # if next_token == EOS:
+            #     break
+        break
 
-    # Start decoding with the EOS token (or any start symbol)
-    next_token = eos_token
-    for _ in range(max_len):
-        decoded_tokens.append(next_token)
-        decoder_tokens = pad_or_truncate(decoded_tokens, context_length=300, pad_token=pad_token)
-        decoder_input = torch.tensor(decoder_tokens, dtype=torch.long).unsqueeze(0).to(device)
-
-        with torch.no_grad():
-            logits = model(encoder_input, decoder_input)
-            probs = torch.softmax(logits, dim=-1)
-            next_token = int(torch.argmax(probs, dim=-1).item())
-
-        if next_token == eos_token:
-            break
-
-    # ---- Decode and Print ----
-    # Remove the initial EOS token from output if you added it
-    output_text = decode(decoded_tokens[1:], vocab)
-    print("Generated tokens:", decoded_tokens)
+    # convert to text (drop SOS, include EOS if present)
+    output_text = decode_bytes(generated[1:], vocab_bytes)
+    # print("Generated tokens:", generated)
     print("Output text:", output_text)
 
 
